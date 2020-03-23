@@ -176,7 +176,7 @@ func translateListMatcher(in []string) *envoymatcher.ListStringMatcher {
 	for _, pattern := range in {
 		lsm.Patterns = append(lsm.Patterns, &envoymatcher.StringMatcher{
 			MatchPattern: &envoymatcher.StringMatcher_Exact{
-				Exact: pattern,
+				Exact: strings.ToLower(pattern),
 			},
 		})
 	}
@@ -188,7 +188,7 @@ func convertHeadersToAdd(headersToAddMap map[string]string) []*envoycore.HeaderV
 	var headersToAdd []*envoycore.HeaderValue
 	for k, v := range headersToAddMap {
 		headersToAdd = append(headersToAdd, &envoycore.HeaderValue{
-			Key:   k,
+			Key:   strings.ToLower(k),
 			Value: v,
 		})
 	}
