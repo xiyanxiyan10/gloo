@@ -194,10 +194,15 @@ var _ = Describe("Translator", func() {
 			}
 			snap.Gateways = append(snap.Gateways, &dupeGateway)
 
-			_, errs := translator.Translate(context.Background(), defaults.GatewayProxyName, ns, snap, snap.Gateways)
+			proxy, errs := translator.Translate(context.Background(), defaults.GatewayProxyName, ns, snap, snap.Gateways)
 			err := errs.ValidateStrict()
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("bind-address :2 is not unique in a proxy. gateways: gloo-system.name,gloo-system.name2"))
+
+			// An error on the gateway CRD should cause the proxy to be rejected
+			Expect(proxy.GetStatus().State).To(Equal(core.Status_Warning))
+			Expect(proxy.GetStatus().ReportedBy).To(Equal("gateway"))
+			Expect(len(proxy.GetStatus().SubresourceStatuses)).To(Equal(2))
 		})
 
 		It("should warn on vs with missing delegate action", func() {

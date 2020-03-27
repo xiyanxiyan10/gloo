@@ -3,6 +3,7 @@ package translator
 import (
 	"context"
 	"fmt"
+	errors "github.com/rotisserie/eris"
 	"strings"
 
 	v1 "github.com/solo-io/gloo/projects/gateway/pkg/api/v1"
@@ -57,7 +58,7 @@ func (t *translator) Translate(ctx context.Context, proxyName, namespace string,
 		logger.Infof("%v had no gateways", snapHash)
 		return nil, reports
 	}
-	validateGateways(filteredGateways, snap.VirtualServices, reports)
+	gwSubresourceStatus := validateGateways(filteredGateways, snap.VirtualServices, reports)
 	listeners := make([]*gloov1.Listener, 0, len(filteredGateways))
 	for _, listenerFactory := range t.listenerTypes {
 		listeners = append(listeners, listenerFactory.GenerateListeners(ctx, snap, filteredGateways, reports)...)
@@ -65,13 +66,23 @@ func (t *translator) Translate(ctx context.Context, proxyName, namespace string,
 	if len(listeners) == 0 {
 		return nil, reports
 	}
-	return &gloov1.Proxy{
+	proxy := &gloov1.Proxy{
 		Metadata: core.Metadata{
 			Name:      proxyName,
 			Namespace: namespace,
 		},
 		Listeners: listeners,
-	}, reports
+	}
+	// Propagate gateway errors to the proxy
+	if len(gwSubresourceStatus) > 0 {
+		proxy.SetStatus(core.Status{
+			SubresourceStatuses:  gwSubresourceStatus,
+			State:                core.Status_Warning,
+			Reason:               "detected gateway errors",
+			ReportedBy:           "gateway",
+		})
+	}
+	return proxy, reports
 }
 
 func makeListener(gateway *v1.Gateway) *gloov1.Listener {
@@ -88,7 +99,8 @@ func ListenerName(gateway *v1.Gateway) string {
 	return fmt.Sprintf("listener-%s-%d", gateway.BindAddress, gateway.BindPort)
 }
 
-func validateGateways(gateways v1.GatewayList, virtualServices v1.VirtualServiceList, reports reporter.ResourceReports) {
+func validateGateways(gateways v1.GatewayList, virtualServices v1.VirtualServiceList, reports reporter.ResourceReports) map[string]*core.Status {
+	gwSubresourceStatus := map[string]*core.Status{}
 	bindAddresses := map[string]v1.GatewayList{}
 	// if two gateway (=listener) that belong to the same proxy share the same bind address,
 	// they are invalid.
@@ -99,7 +111,13 @@ func validateGateways(gateways v1.GatewayList, virtualServices v1.VirtualService
 		if httpGw := gw.GetHttpGateway(); httpGw != nil {
 			for _, vs := range httpGw.VirtualServices {
 				if _, err := virtualServices.Find(vs.Strings()); err != nil {
-					reports.AddError(gw, fmt.Errorf("invalid virtual service ref %v", vs))
+					errString := fmt.Sprintf("invalid virtual service ref %v", vs)
+					reports.AddError(gw, errors.New(errString))
+					gwSubresourceStatus[fmt.Sprintf("%T.%s", gw, gw.GetMetadata().Ref().Key())] = &core.Status{
+						State:                core.Status_Rejected,
+						Reason:               errString,
+						ReportedBy:           "gateway",
+					}
 				}
 			}
 		}
@@ -108,10 +126,19 @@ func validateGateways(gateways v1.GatewayList, virtualServices v1.VirtualService
 	for addr, gateways := range bindAddresses {
 		if len(gateways) > 1 {
 			for _, gw := range gateways {
-				reports.AddError(gw, fmt.Errorf("bind-address %s is not unique in a proxy. gateways: %s", addr, strings.Join(gatewaysRefsToString(gateways), ",")))
+				errString := fmt.Sprintf("bind-address %s is not unique in a proxy. gateways: %s", addr,
+					strings.Join(gatewaysRefsToString(gateways), ","))
+				reports.AddError(gw, errors.New(errString))
+				//gwErrs = append(gwErrs, errString)
+				gwSubresourceStatus[fmt.Sprintf("%T.%s", gw, gw.GetMetadata().Ref().Key())] = &core.Status{
+					State:                core.Status_Rejected,
+					Reason:               errString,
+					ReportedBy:           "gateway",
+				}
 			}
 		}
 	}
+	return gwSubresourceStatus
 }
 
 func gatewaysRefsToString(gateways v1.GatewayList) []string {

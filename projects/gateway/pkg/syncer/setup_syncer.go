@@ -184,7 +184,7 @@ func RunGateway(opts translator.Opts) error {
 		return err
 	}
 
-	rpt := reporter.NewReporter("gateway", gatewayClient.BaseClient(), virtualServiceClient.BaseClient(), routeTableClient.BaseClient())
+	rpt := reporter.NewReporter("gateway", gatewayClient.BaseClient(), virtualServiceClient.BaseClient(), routeTableClient.BaseClient(), proxyClient.BaseClient())
 	writeErrs := make(chan error)
 
 	prop := propagator.NewPropagator("gateway", gatewayClient, virtualServiceClient, proxyClient, writeErrs)
