@@ -3,7 +3,6 @@ package syncer
 import (
 	"context"
 	"fmt"
-
 	"go.uber.org/zap/zapcore"
 
 	"github.com/solo-io/gloo/pkg/utils/syncutil"
@@ -101,6 +100,7 @@ func (s *translatorSyncer) propagateProxyStatus(ctx context.Context, proxy *gloo
 	if proxy == nil {
 		return nil
 	}
+	logger := contextutils.LoggerFrom(ctx)
 	statuses, err := watchProxyStatus(ctx, s.proxyClient, proxy)
 	if err != nil {
 		return err
@@ -112,8 +112,23 @@ func (s *translatorSyncer) propagateProxyStatus(ctx context.Context, proxy *gloo
 			case <-ctx.Done():
 				return
 			case status := <-statuses:
-				logger := contextutils.LoggerFrom(ctx)
 				logger.Debugf("gateway received proxy status: %v", status)
+
+				// Propagate gateway errors and warnings to proxy subresource status
+				gwProblems := reports.ValidateStrict()
+				logger.Infow("AWANG | all report errors and warnings", zap.Any("problems", gwProblems))
+				if reports.ValidateStrict() != nil {
+					proxy.SetStatus(core.Status{
+						SubresourceStatuses:  map[string]*core.Status{"gateway":&core.Status{
+							State: core.Status_Warning,
+							Reason: gwProblems.Error(),
+							ReportedBy: "gateway",
+						}},
+						State:                core.Status_Warning,
+						Reason:               "detected gateway errors",
+						ReportedBy:           "gateway",
+					})
+				}
 				if status.Equal(lastStatus) {
 					continue
 				}
